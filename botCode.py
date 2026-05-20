@@ -3,9 +3,8 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
-# Укажите здесь токен вашего бота, полученный у @BotFather
-TOKEN = "8601701792:AAFt5mgc4eyxYya1_xSzmDWWi2FJ621JyI0"
-
+import os
+TOKEN = os.getenv("8601701792:AAFt5mgc4eyxYya1_xSzmDWWi2FJ621JyI0")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
