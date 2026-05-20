@@ -4,10 +4,10 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 import os
-TOKEN = os.getenv("8601701792:AAFt5mgc4eyxYya1_xSzmDWWi2FJ621JyI0")
+TOKEN = os.getenv("TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-TOKEN= "8601701792:AAFt5mgc4eyxYya1_xSzmDWWi2FJ621JyI0"
+
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
