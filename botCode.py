@@ -7,9 +7,7 @@ import os
 
 TOKEN = os.getenv("TOKEN")
 
-# Твой личный Telegram ID (узнать можно у @userinfobot)
-# Можно указать несколько админов: ADMIN_IDS = [123456789, 987654321]
-ADMIN_IDS = [int(x) for x in os.getenv("853187215", "").split(",") if x.strip()]
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -31,7 +29,6 @@ async def cmd_start(message: types.Message):
     await message.answer("Переходите в наше приложение", reply_markup=markup)
 
 
-# Команда для того чтобы узнать свой ID прямо в боте
 @dp.message(Command("myid"))
 async def cmd_myid(message: types.Message):
     await message.answer(f"Ваш Telegram ID: <code>{message.from_user.id}</code>", parse_mode="HTML")
@@ -48,12 +45,10 @@ async def handle_web_app_data(message: types.Message):
         price      = data.get("price", "—")
         status     = data.get("status", "—")
 
-        # Информация о покупателе
         user = message.from_user
         buyer_info = f"@{user.username}" if user.username else f"id: {user.id}"
         buyer_line = f"👤 <b>Покупатель:</b> {buyer_info} (<code>{user.id}</code>)\n"
 
-        # Дополнительные поля в зависимости от типа
         extra = ""
         if order_type == "PUBG UC":
             method = data.get("method", "—")
@@ -67,7 +62,6 @@ async def handle_web_app_data(message: types.Message):
 
         status_emoji = "✅" if status == "paid" else "⏳"
 
-        # Сообщение клиенту (без данных покупателя)
         client_text = (
             f"🧾 <b>ВАШ ЗАКАЗ ПРИНЯТ</b>\n"
             f"{'─' * 28}\n"
@@ -81,7 +75,6 @@ async def handle_web_app_data(message: types.Message):
             f"Мы свяжемся с вами в ближайшее время!"
         )
 
-        # Сообщение админу (с данными покупателя)
         admin_text = (
             f"🔔 <b>НОВЫЙ ЗАКАЗ</b>\n"
             f"{'─' * 28}\n"
@@ -95,10 +88,8 @@ async def handle_web_app_data(message: types.Message):
             f"{status_emoji} <b>Статус:</b> Ожидает выполнения"
         )
 
-        # Отправляем клиенту подтверждение
         await message.answer(client_text, parse_mode="HTML")
 
-        # Дублируем всем админам
         for admin_id in ADMIN_IDS:
             try:
                 await bot.send_message(admin_id, admin_text, parse_mode="HTML")
