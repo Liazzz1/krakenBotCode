@@ -10,7 +10,7 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 bot = Bot(token=TOKEN)
 dp  = Dispatcher()
 
-# user_id -> order_id: ждём квитанцию только от этих пользователей
+# user_id -> order_id
 pending_receipts: dict[int, str] = {}
 
 
@@ -33,105 +33,109 @@ async def cmd_myid(message: types.Message):
     )
 
 
-@dp.message()
-async def handle_all(message: types.Message):
-    user    = message.from_user
-    user_id = user.id
-    text    = message.text or ""
-
-    # ── Служебное: HTML просит бота уведомить клиента и сохранить pending ────
-    # Формат: __NOTIFY_CLIENT__:<client_id>:<order_id>
-    if text.startswith("__NOTIFY_CLIENT__:"):
-        # Принимаем только от админов
-        if user_id not in ADMIN_IDS:
-            try: await message.delete()
-            except: pass
-            return
-        try:
-            _, client_id_str, order_id = text.split(":", 2)
-            client_id = int(client_id_str)
-        except Exception:
-            return
-        # Сохраняем pending
-        pending_receipts[client_id] = order_id
-        print(f"✅ Pending: user={client_id} order={order_id}")
-        # Пишем клиенту
-        try:
-            await bot.send_message(
-                client_id,
-                f"✅ Заказ <b>№{order_id}</b> принят!\n\n"
-                f"Отправьте сюда <b>скриншот квитанции об оплате</b> для подтверждения.",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            print(f"❌ Не удалось написать клиенту {client_id}: {e}")
-        # Удаляем служебное сообщение
+# ── Служебное сообщение — ОТДЕЛЬНЫЙ хендлер с фильтром, высший приоритет ──────
+@dp.message(F.text.startswith("__NOTIFY_CLIENT__:"))
+async def handle_notify_client(message: types.Message):
+    try:
+        parts = message.text.split(":", 2)
+        client_id = int(parts[1])
+        order_id  = parts[2]
+    except Exception as e:
+        print(f"❌ Ошибка парсинга NOTIFY_CLIENT: {e}")
         try: await message.delete()
         except: pass
         return
 
-    # ── Фото или документ — квитанция ────────────────────────────────────────
-    if message.photo or message.document:
-        order_id = pending_receipts.get(user_id)
-        if not order_id:
-            await message.answer(
-                "⚠️ Квитанция не принята.\n\n"
-                "Сначала оформите заказ в магазине — после оплаты "
-                "бот сам попросит вас прислать квитанцию."
-            )
-            return
+    # Сохраняем pending
+    pending_receipts[client_id] = order_id
+    print(f"✅ Pending: client={client_id} order={order_id}")
 
-        del pending_receipts[user_id]
-
-        buyer_info    = f"@{user.username}" if user.username else f"id: {user_id}"
-        admin_caption = (
-            f"🧾 <b>КВИТАНЦИЯ ОБ ОПЛАТЕ</b>\n"
-            f"{'─' * 28}\n"
-            f"🔑 <b>№ Заказа:</b> <code>{order_id}</code>\n"
-            f"👤 <b>От:</b> {buyer_info} (<code>{user_id}</code>)"
+    # Пишем клиенту
+    try:
+        await bot.send_message(
+            client_id,
+            f"✅ Заказ <b>№{order_id}</b> принят!\n\n"
+            f"Отправьте сюда <b>скриншот квитанции об оплате</b> для подтверждения.",
+            parse_mode="HTML"
         )
+    except Exception as e:
+        print(f"❌ Не удалось написать клиенту {client_id}: {e}")
 
-        sent = False
-        for admin_id in ADMIN_IDS:
-            try:
-                if message.photo:
-                    await bot.send_photo(
-                        admin_id,
-                        photo=message.photo[-1].file_id,
-                        caption=admin_caption,
-                        parse_mode="HTML"
-                    )
-                else:
-                    await bot.send_document(
-                        admin_id,
-                        document=message.document.file_id,
-                        caption=admin_caption,
-                        parse_mode="HTML"
-                    )
-                sent = True
-            except Exception as e:
-                print(f"❌ Админ {admin_id}: {e}")
+    # Удаляем служебное сообщение
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
-        if sent:
-            await message.answer(
-                f"✅ Квитанция для заказа <b>№{order_id}</b> получена!\n"
-                f"Ваш заказ будет обработан в ближайшее время.",
-                parse_mode="HTML"
-            )
-        else:
-            pending_receipts[user_id] = order_id
-            await message.answer("⚠️ Не удалось переслать квитанцию. Попробуйте ещё раз.")
+
+# ── Фото или документ — квитанция ────────────────────────────────────────────
+@dp.message(F.photo | F.document)
+async def handle_receipt(message: types.Message):
+    user    = message.from_user
+    user_id = user.id
+
+    order_id = pending_receipts.get(user_id)
+    if not order_id:
+        await message.answer(
+            "⚠️ Квитанция не принята.\n\n"
+            "Сначала оформите заказ в магазине — после оплаты "
+            "бот сам попросит вас прислать квитанцию."
+        )
         return
 
-    # ── Обычный текст — подсказка ────────────────────────────────────────────
-    if text and not text.startswith("/"):
-        if user_id in pending_receipts:
-            order_id = pending_receipts[user_id]
-            await message.answer(
-                f"📎 Для заказа <b>№{order_id}</b> отправьте "
-                f"<b>фото или скриншот</b> квитанции об оплате.",
-                parse_mode="HTML"
-            )
+    del pending_receipts[user_id]
+
+    buyer_info    = f"@{user.username}" if user.username else f"id: {user_id}"
+    admin_caption = (
+        f"🧾 <b>КВИТАНЦИЯ ОБ ОПЛАТЕ</b>\n"
+        f"{'─' * 28}\n"
+        f"🔑 <b>№ Заказа:</b> <code>{order_id}</code>\n"
+        f"👤 <b>От:</b> {buyer_info} (<code>{user_id}</code>)"
+    )
+
+    sent = False
+    for admin_id in ADMIN_IDS:
+        try:
+            if message.photo:
+                await bot.send_photo(
+                    admin_id,
+                    photo=message.photo[-1].file_id,
+                    caption=admin_caption,
+                    parse_mode="HTML"
+                )
+            else:
+                await bot.send_document(
+                    admin_id,
+                    document=message.document.file_id,
+                    caption=admin_caption,
+                    parse_mode="HTML"
+                )
+            sent = True
+        except Exception as e:
+            print(f"❌ Админ {admin_id}: {e}")
+
+    if sent:
+        await message.answer(
+            f"✅ Квитанция для заказа <b>№{order_id}</b> получена!\n"
+            f"Ваш заказ будет обработан в ближайшее время.",
+            parse_mode="HTML"
+        )
+    else:
+        pending_receipts[user_id] = order_id
+        await message.answer("⚠️ Не удалось переслать квитанцию. Попробуйте ещё раз.")
+
+
+# ── Обычный текст — подсказка ─────────────────────────────────────────────────
+@dp.message(F.text & ~F.text.startswith('/') & ~F.text.startswith('__'))
+async def handle_text(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in pending_receipts:
+        order_id = pending_receipts[user_id]
+        await message.answer(
+            f"📎 Для заказа <b>№{order_id}</b> отправьте "
+            f"<b>фото или скриншот</b> квитанции об оплате.",
+            parse_mode="HTML"
+        )
 
 
 async def main():
