@@ -3,7 +3,9 @@ import json
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from aiogram.exceptions import TelegramConflictError
 import os
+
 
 TOKEN = os.getenv("TOKEN")
 
@@ -103,12 +105,29 @@ async def handle_web_app_data(message: types.Message):
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
+    await asyncio.sleep(1)
     print("Бот успешно запущен и готов к работе!")
     if not ADMIN_IDS:
         print("⚠️  ВНИМАНИЕ: переменная ADMIN_IDS не задана — уведомления админу не будут отправляться.")
     else:
         print(f"✅ Уведомления будут отправляться админам: {ADMIN_IDS}")
-    await dp.start_polling(bot)
+
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
+        try:
+            await dp.start_polling(bot)
+            break
+        except TelegramConflictError as e:
+            print(f"⚠️ Конфликт polling (попытка {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                wait = attempt * 2
+                print(f"🔄 Повтор через {wait} сек...")
+                await bot.delete_webhook(drop_pending_updates=True)
+                await asyncio.sleep(wait)
+            else:
+                print("❌ Не удалось запустить polling после нескольких попыток.")
+                raise
+
 
 
 if __name__ == "__main__":
