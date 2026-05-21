@@ -1,5 +1,4 @@
 import asyncio
-import re
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
@@ -11,7 +10,7 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 bot = Bot(token=TOKEN)
 dp  = Dispatcher()
 
-# user_id -> order_id: ждём квитанцию только от этих пользователей
+# user_id -> order_id
 pending_receipts: dict[int, str] = {}
 
 
@@ -34,89 +33,87 @@ async def cmd_myid(message: types.Message):
     )
 
 
-# ── Служебное сообщение от мини-аппа: регистрируем ожидание квитанции ────────
-@dp.message(F.text.startswith("__PENDING_RECEIPT__:"))
-async def register_pending(message: types.Message):
-    order_id = message.text.split(":", 1)[1].strip()
-    pending_receipts[message.from_user.id] = order_id
-    print(f"✅ Ожидаем квитанцию от {message.from_user.id} для заказа {order_id}")
-    # Удаляем служебное сообщение чтобы оно не мозолило глаза
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-
-# ── Получаем фото или документ ────────────────────────────────────────────────
-@dp.message(F.photo | F.document)
-async def handle_receipt(message: types.Message):
+# ── ВСЕ входящие сообщения — обрабатываем в одном хендлере по порядку ────────
+@dp.message()
+async def handle_all(message: types.Message):
     user    = message.from_user
     user_id = user.id
+    text    = message.text or ""
 
-    # Строго: принимаем только если есть активный заказ
-    order_id = pending_receipts.get(user_id)
-
-    if not order_id:
-        await message.answer(
-            "⚠️ Квитанция не принята.\n\n"
-            "Сначала оформите заказ в магазине — после оплаты бот сам попросит вас прислать квитанцию.",
-        )
+    # 1. Служебное сообщение от мини-аппа — регистрируем pending
+    if text.startswith("__PENDING_RECEIPT__:"):
+        order_id = text.split(":", 1)[1].strip()
+        pending_receipts[user_id] = order_id
+        print(f"✅ Pending зарегистрирован: user={user_id} order={order_id}")
+        try:
+            await message.delete()
+        except Exception:
+            pass
         return
 
-    # Удаляем из ожидания
-    del pending_receipts[user_id]
+    # 2. Фото или документ — квитанция
+    if message.photo or message.document:
+        order_id = pending_receipts.get(user_id)
 
-    buyer_info  = f"@{user.username}" if user.username else f"id: {user_id}"
-    admin_caption = (
-        f"🧾 <b>КВИТАНЦИЯ ОБ ОПЛАТЕ</b>\n"
-        f"{'─' * 28}\n"
-        f"🔑 <b>№ Заказа:</b> <code>{order_id}</code>\n"
-        f"👤 <b>От:</b> {buyer_info} (<code>{user_id}</code>)"
-    )
+        if not order_id:
+            await message.answer(
+                "⚠️ Квитанция не принята.\n\n"
+                "Сначала оформите заказ в магазине — после оплаты "
+                "бот сам попросит вас прислать квитанцию."
+            )
+            return
 
-    sent = False
-    for admin_id in ADMIN_IDS:
-        try:
-            if message.photo:
-                await bot.send_photo(
-                    admin_id,
-                    photo=message.photo[-1].file_id,
-                    caption=admin_caption,
-                    parse_mode="HTML"
-                )
-            else:
-                await bot.send_document(
-                    admin_id,
-                    document=message.document.file_id,
-                    caption=admin_caption,
-                    parse_mode="HTML"
-                )
-            sent = True
-        except Exception as e:
-            print(f"❌ Не удалось отправить квитанцию админу {admin_id}: {e}")
+        del pending_receipts[user_id]
 
-    if sent:
-        await message.answer(
-            f"✅ Квитанция для заказа <b>№{order_id}</b> получена!\n"
-            f"Ваш заказ будет обработан в ближайшее время.",
-            parse_mode="HTML"
+        buyer_info    = f"@{user.username}" if user.username else f"id: {user_id}"
+        admin_caption = (
+            f"🧾 <b>КВИТАНЦИЯ ОБ ОПЛАТЕ</b>\n"
+            f"{'─' * 28}\n"
+            f"🔑 <b>№ Заказа:</b> <code>{order_id}</code>\n"
+            f"👤 <b>От:</b> {buyer_info} (<code>{user_id}</code>)"
         )
-    else:
-        # Возвращаем в pending если не удалось отправить
-        pending_receipts[user_id] = order_id
-        await message.answer("⚠️ Не удалось переслать квитанцию. Попробуйте ещё раз.")
 
+        sent = False
+        for admin_id in ADMIN_IDS:
+            try:
+                if message.photo:
+                    await bot.send_photo(
+                        admin_id,
+                        photo=message.photo[-1].file_id,
+                        caption=admin_caption,
+                        parse_mode="HTML"
+                    )
+                else:
+                    await bot.send_document(
+                        admin_id,
+                        document=message.document.file_id,
+                        caption=admin_caption,
+                        parse_mode="HTML"
+                    )
+                sent = True
+            except Exception as e:
+                print(f"❌ Админ {admin_id}: {e}")
 
-# ── Текст — подсказка если ждём квитанцию ────────────────────────────────────
-@dp.message(F.text & ~F.text.startswith('/') & ~F.text.startswith('__'))
-async def handle_text(message: types.Message):
-    user_id = message.from_user.id
-    if user_id in pending_receipts:
-        order_id = pending_receipts[user_id]
-        await message.answer(
-            f"📎 Для заказа <b>№{order_id}</b> отправьте <b>фото или скриншот</b> квитанции об оплате.",
-            parse_mode="HTML"
-        )
+        if sent:
+            await message.answer(
+                f"✅ Квитанция для заказа <b>№{order_id}</b> получена!\n"
+                f"Ваш заказ будет обработан в ближайшее время.",
+                parse_mode="HTML"
+            )
+        else:
+            pending_receipts[user_id] = order_id
+            await message.answer("⚠️ Не удалось переслать квитанцию. Попробуйте ещё раз.")
+        return
+
+    # 3. Обычный текст — подсказка если ждём квитанцию
+    if text and not text.startswith("/"):
+        if user_id in pending_receipts:
+            order_id = pending_receipts[user_id]
+            await message.answer(
+                f"📎 Для заказа <b>№{order_id}</b> отправьте "
+                f"<b>фото или скриншот</b> квитанции об оплате.",
+                parse_mode="HTML"
+            )
 
 
 async def main():
