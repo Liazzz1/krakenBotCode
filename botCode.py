@@ -33,7 +33,9 @@ async def cmd_myid(message: types.Message):
     )
 
 
-# ── Служебное сообщение — ОТДЕЛЬНЫЙ хендлер с фильтром, высший приоритет ──────
+# ── Служебное сообщение от фронтенда ─────────────────────────────────────────
+# Фронтенд шлёт __NOTIFY_CLIENT__:CLIENT_ID:ORDER_ID боту в личку клиента.
+# Бот получает это сообщение, сохраняет pending и просит квитанцию.
 @dp.message(F.text.startswith("__NOTIFY_CLIENT__:"))
 async def handle_notify_client(message: types.Message):
     try:
@@ -42,26 +44,28 @@ async def handle_notify_client(message: types.Message):
         order_id  = parts[2]
     except Exception as e:
         print(f"❌ Ошибка парсинга NOTIFY_CLIENT: {e}")
-        try: await message.delete()
-        except: pass
+        try:
+            await message.delete()
+        except:
+            pass
         return
 
     # Сохраняем pending
     pending_receipts[client_id] = order_id
     print(f"✅ Pending: client={client_id} order={order_id}")
 
-    # Пишем клиенту
+    # Просим квитанцию у клиента
     try:
         await bot.send_message(
             client_id,
-            f"✅ Заказ <b>№{order_id}</b> принят!\n\n"
-            f"Отправьте сюда <b>скриншот квитанции об оплате</b> для подтверждения.",
+            f"📎 Для подтверждения заказа <b>№{order_id}</b>\n\n"
+            f"Отправьте <b>скриншот или фото квитанции об оплате</b> прямо сюда.",
             parse_mode="HTML"
         )
     except Exception as e:
         print(f"❌ Не удалось написать клиенту {client_id}: {e}")
 
-    # Удаляем служебное сообщение
+    # Удаляем служебное сообщение из чата
     try:
         await message.delete()
     except Exception:
