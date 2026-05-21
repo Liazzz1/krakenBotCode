@@ -10,7 +10,7 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 bot = Bot(token=TOKEN)
 dp  = Dispatcher()
 
-# user_id -> order_id
+# user_id -> order_id: ждём квитанцию только от этих пользователей
 pending_receipts: dict[int, str] = {}
 
 
@@ -33,28 +33,46 @@ async def cmd_myid(message: types.Message):
     )
 
 
-# ── ВСЕ входящие сообщения — обрабатываем в одном хендлере по порядку ────────
 @dp.message()
 async def handle_all(message: types.Message):
     user    = message.from_user
     user_id = user.id
     text    = message.text or ""
 
-    # 1. Служебное сообщение от мини-аппа — регистрируем pending
-    if text.startswith("__PENDING_RECEIPT__:"):
-        order_id = text.split(":", 1)[1].strip()
-        pending_receipts[user_id] = order_id
-        print(f"✅ Pending зарегистрирован: user={user_id} order={order_id}")
+    # ── Служебное: HTML просит бота уведомить клиента и сохранить pending ────
+    # Формат: __NOTIFY_CLIENT__:<client_id>:<order_id>
+    if text.startswith("__NOTIFY_CLIENT__:"):
+        # Принимаем только от админов
+        if user_id not in ADMIN_IDS:
+            try: await message.delete()
+            except: pass
+            return
         try:
-            await message.delete()
+            _, client_id_str, order_id = text.split(":", 2)
+            client_id = int(client_id_str)
         except Exception:
-            pass
+            return
+        # Сохраняем pending
+        pending_receipts[client_id] = order_id
+        print(f"✅ Pending: user={client_id} order={order_id}")
+        # Пишем клиенту
+        try:
+            await bot.send_message(
+                client_id,
+                f"✅ Заказ <b>№{order_id}</b> принят!\n\n"
+                f"Отправьте сюда <b>скриншот квитанции об оплате</b> для подтверждения.",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            print(f"❌ Не удалось написать клиенту {client_id}: {e}")
+        # Удаляем служебное сообщение
+        try: await message.delete()
+        except: pass
         return
 
-    # 2. Фото или документ — квитанция
+    # ── Фото или документ — квитанция ────────────────────────────────────────
     if message.photo or message.document:
         order_id = pending_receipts.get(user_id)
-
         if not order_id:
             await message.answer(
                 "⚠️ Квитанция не принята.\n\n"
@@ -105,7 +123,7 @@ async def handle_all(message: types.Message):
             await message.answer("⚠️ Не удалось переслать квитанцию. Попробуйте ещё раз.")
         return
 
-    # 3. Обычный текст — подсказка если ждём квитанцию
+    # ── Обычный текст — подсказка ────────────────────────────────────────────
     if text and not text.startswith("/"):
         if user_id in pending_receipts:
             order_id = pending_receipts[user_id]
