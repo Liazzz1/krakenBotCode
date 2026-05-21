@@ -3,12 +3,9 @@ import json
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from aiogram.exceptions import TelegramConflictError
 import os
 
-
 TOKEN = os.getenv("TOKEN")
-
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
 bot = Bot(token=TOKEN)
@@ -18,16 +15,9 @@ dp = Dispatcher()
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     web_app_url = "https://liazzz1.github.io/KrakenUCShop/"
-
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="🛒 Открыть магазин",
-                web_app=WebAppInfo(url=web_app_url)
-            )
-        ]
+        [InlineKeyboardButton(text="🛒 Открыть магазин", web_app=WebAppInfo(url=web_app_url))]
     ])
-
     await message.answer("Переходите в наше приложение", reply_markup=markup)
 
 
@@ -36,10 +26,28 @@ async def cmd_myid(message: types.Message):
     await message.answer(f"Ваш Telegram ID: <code>{message.from_user.id}</code>", parse_mode="HTML")
 
 
+# Логируем ВСЕ входящие сообщения — чтобы видеть доходит ли что-то от мини-аппа
+@dp.message()
+async def log_all(message: types.Message):
+    print(f"📨 Сообщение от {message.from_user.id}: content_type={message.content_type}")
+    if message.web_app_data:
+        print(f"✅ web_app_data ПОЛУЧЕНЫ: {message.web_app_data.data}")
+        await handle_order(message)
+    else:
+        print(f"⚠️ Это не web_app_data. Текст: {message.text}")
+
+
 @dp.message(F.web_app_data)
 async def handle_web_app_data(message: types.Message):
+    print(f"✅ [F.web_app_data] сработал от {message.from_user.id}")
+    await handle_order(message)
+
+
+async def handle_order(message: types.Message):
     try:
-        data = json.loads(message.web_app_data.data)
+        raw = message.web_app_data.data
+        print(f"📦 RAW данные: {raw}")
+        data = json.loads(raw)
 
         order_id   = data.get("order_id", "—")
         order_type = data.get("type", "—")
@@ -91,43 +99,28 @@ async def handle_web_app_data(message: types.Message):
         )
 
         await message.answer(client_text, parse_mode="HTML")
+        print(f"✅ Подтверждение отправлено клиенту {user.id}")
 
         for admin_id in ADMIN_IDS:
             try:
                 await bot.send_message(admin_id, admin_text, parse_mode="HTML")
+                print(f"✅ Уведомление отправлено админу {admin_id}")
             except Exception as e:
-                print(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+                print(f"❌ Не удалось отправить админу {admin_id}: {e}")
 
-    except (json.JSONDecodeError, KeyError) as e:
+    except Exception as e:
+        print(f"❌ Ошибка обработки заказа: {e}")
         await message.answer("⚠️ Получены данные в неверном формате.")
-        print(f"Ошибка парсинга web_app_data: {e}")
 
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
-    await asyncio.sleep(1)
-    print("Бот успешно запущен и готов к работе!")
+    print("🚀 Бот запущен!")
     if not ADMIN_IDS:
-        print("⚠️  ВНИМАНИЕ: переменная ADMIN_IDS не задана — уведомления админу не будут отправляться.")
+        print("⚠️ ADMIN_IDS не задан!")
     else:
         print(f"✅ Уведомления будут отправляться админам: {ADMIN_IDS}")
-
-    max_retries = 5
-    for attempt in range(1, max_retries + 1):
-        try:
-            await dp.start_polling(bot)
-            break
-        except TelegramConflictError as e:
-            print(f"⚠️ Конфликт polling (попытка {attempt}/{max_retries}): {e}")
-            if attempt < max_retries:
-                wait = attempt * 2
-                print(f"🔄 Повтор через {wait} сек...")
-                await bot.delete_webhook(drop_pending_updates=True)
-                await asyncio.sleep(wait)
-            else:
-                print("❌ Не удалось запустить polling после нескольких попыток.")
-                raise
-
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
