@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KrakenUC Shop</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    /* ── Reset & base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d0d1a;
+      --surface:   #161628;
+      --card:      #1e1e35;
+      --accent:    #7b5cfa;
+      --accent2:   #a78bfa;
+      --gold:      #f5c542;
+      --text:      #e8e8f0;
+      --muted:     #8888aa;
+      --border:    #2a2a45;
+      --radius:    14px;
+      --shadow:    0 4px 24px rgba(0,0,0,.45);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      padding-bottom: 40px;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #1a1a30 0%, #0d0d1a 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 20px 14px;
+      text-align: center;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: .5px;
+    }
+    .header p {
+      font-size: .8rem;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+
+    /* ── Section title ── */
+    .section-title {
+      font-size: .75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--muted);
+      padding: 22px 20px 10px;
+    }
+
+    /* ── Product grid ── */
+    .products-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 14px;
+      padding: 0 16px;
+    }
+
+    .product-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 12px 14px;
+      cursor: pointer;
+      transition: transform .18s, border-color .18s, box-shadow .18s;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .product-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(123,92,250,.08), transparent);
+      opacity: 0;
+      transition: opacity .18s;
+    }
+    .product-card:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: var(--shadow); }
+    .product-card:hover::before { opacity: 1; }
+    .product-card:active { transform: scale(.97); }
+
+    .product-card .uc-icon {
+      font-size: 2rem;
+      margin-bottom: 8px;
+      display: block;
+    }
+    .product-card .uc-amount {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--gold);
+    }
+    .product-card .uc-label {
+      font-size: .7rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .product-card .uc-price {
+      margin-top: 10px;
+      font-size: .95rem;
+      font-weight: 600;
+      color: var(--accent2);
+    }
+    .product-card .badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-size: .6rem;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    /* ── Modal overlay ── */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.7);
+      z-index: 100;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .modal-overlay.active { display: flex; }
+
+    .modal {
+      background: var(--surface);
+      border-radius: 20px 20px 0 0;
+      border-top: 1px solid var(--border);
+      width: 100%;
+      max-width: 480px;
+      padding: 24px 20px 32px;
+      animation: slideUp .25s ease;
+    }
+    @keyframes slideUp {
+      from { transform: translateY(100%); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+
+    .modal-handle {
+      width: 40px;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      margin: 0 auto 20px;
+    }
+
+    .modal h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 18px;
+      color: var(--text);
+    }
+
+    /* ── Payment details list ── */
+    .payment-details {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 18px;
+    }
+    .detail-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: .88rem;
+    }
+    .detail-item:last-child { border-bottom: none; }
+    .detail-item .label { color: var(--muted); }
+    .detail-item .value { font-weight: 600; color: var(--text); text-align: right; }
+    .detail-item .value.gold  { color: var(--gold); }
+    .detail-item .value.green { color: #4ade80; }
+    .detail-item .value.time  { color: var(--accent2); font-size: .82rem; font-variant-numeric: tabular-nums; }
+
+    /* ── User ID input ── */
+    .input-group {
+      margin-bottom: 18px;
+    }
+    .input-group label {
+      display: block;
+      font-size: .8rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+    .input-group input {
+      width: 100%;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 11px 14px;
+      color: var(--text);
+      font-size: .95rem;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .input-group input:focus { border-color: var(--accent); }
+    .input-group input::placeholder { color: var(--muted); }
+
+    /* ── Mode toggle ── */
+    .mode-toggle {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+    .mode-btn {
+      flex: 1;
+      padding: 9px 0;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--muted);
+      font-size: .82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    .mode-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* ── Confirm button ── */
+    .btn-confirm {
+      width: 100%;
+      padding: 14px;
+      border-radius: var(--radius);
+      border: none;
+      background: linear-gradient(135deg, var(--accent), #5b3fd4);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: .3px;
+      transition: opacity .15s, transform .1s;
+      box-shadow: 0 4px 16px rgba(123,92,250,.4);
+    }
+    .btn-confirm:hover  { opacity: .92; }
+    .btn-confirm:active { transform: scale(.98); }
+    .btn-confirm:disabled { opacity: .45; cursor: not-allowed; }
+
+    /* ── Close button ── */
+    .btn-close {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color .15s;
+    }
+    .btn-close:hover { color: var(--text); }
+
+    .modal { position: relative; }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: #1e1e35;
+      border: 1px solid var(--accent);
+      color: var(--text);
+      padding: 10px 20px;
+      border-radius: 30px;
+      font-size: .85rem;
+      font-weight: 500;
+      opacity: 0;
+      transition: opacity .25s, transform .25s;
+      z-index: 200;
+      white-space: nowrap;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <div class="header">
+    <h1>🐙 KrakenUC Shop</h1>
+    <p>Быстрое пополнение UC для PUBG Mobile</p>
+  </div>
+
+  <!-- ── Product listing ── -->
+  <div class="section-title">Выберите пакет UC</div>
+  <div class="products-grid" id="productsGrid"></div>
+
+  <!-- ── Payment modal ── -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+
+      <h2>Оформление заказа</h2>
+
+      <!-- Mode toggle: entry (no ID) vs ID mode -->
+      <div class="mode-toggle">
+        <button class="mode-btn active" id="btnModeEntry" onclick="setMode('entry')">Без ID</button>
+        <button class="mode-btn"        id="btnModeId"    onclick="setMode('id')">С ID</button>
+      </div>
+
+      <!-- User ID input (shown only in ID mode) -->
+      <div class="input-group" id="userIdGroup" style="display:none;">
+        <label for="userIdInput">Ваш PUBG Mobile User ID</label>
+        <input
+          type="text"
+          id="userIdInput"
+          placeholder="Введите ваш User ID"
+          inputmode="numeric"
+          oninput="validateInput()"
+        />
+      </div>
+
+      <!-- Order summary -->
+      <div class="payment-details">
+        <div class="detail-item">
+          <span class="label">Пакет</span>
+          <span class="value gold" id="detailPack">—</span>
+        </div>
+        <div class="detail-item">
+          <span class="label">Цена</span>
+          <span class="value green" id="detailPrice">—</span>
+        </div>
+        <div class="detail-item">
+          <span class="label">Время покупки</span>
+          <span class="value time" id="detailTimestamp">—</span>
+        </div>
+        <div class="detail-item">
+          <span class="label">Статус</span>
+          <span class="value green">✅ Оплачено</span>
+        </div>
+      </div>
+
+      <button class="btn-confirm" id="btnConfirm" onclick="submitFinalOrder()">
+        Подтвердить заказ
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Toast notification ── -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ── Telegram WebApp init ──────────────────────────────────────────────
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+
+    // ── Product catalogue ─────────────────────────────────────────────────
+    const PRODUCTS = [
+      { id: 'uc60',   label: '60 UC',    price: '79 ₽',   icon: '💎', badge: null },
+      { id: 'uc325',  label: '325 UC',   price: '399 ₽',  icon: '💎', badge: 'Хит' },
+      { id: 'uc660',  label: '660 UC',   price: '799 ₽',  icon: '💎', badge: null },
+      { id: 'uc1800', label: '1800 UC',  price: '1999 ₽', icon: '💎', badge: 'Выгодно' },
+      { id: 'uc3850', label: '3850 UC',  price: '3999 ₽', icon: '💎', badge: null },
+      { id: 'uc8100', label: '8100 UC',  price: '7999 ₽', icon: '💎', badge: '🔥 Топ' },
+    ];
+
+    // ── State ─────────────────────────────────────────────────────────────
+    let selectedProduct    = null;   // { id, label, price }
+    let purchaseTimestamp  = null;   // captured when product is selected
+    let currentMode        = 'entry'; // 'entry' | 'id'
+
+    // ── Render product cards ──────────────────────────────────────────────
+    function renderProducts() {
+      const grid = document.getElementById('productsGrid');
+      grid.innerHTML = '';
+      PRODUCTS.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'product-card';
+        card.onclick = () => selectProduct(p);
+        card.innerHTML = `
+          ${p.badge ? `<span class="badge">${p.badge}</span>` : ''}
+          <span class="uc-icon">${p.icon}</span>
+          <div class="uc-amount">${p.label}</div>
+          <div class="uc-label">UC</div>
+          <div class="uc-price">${p.price}</div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    // ── Select product & open modal ───────────────────────────────────────
+    function selectProduct(product) {
+      selectedProduct = product;
+
+      // Capture purchase timestamp at the moment of selection
+      purchaseTimestamp = new Date().toLocaleString('ru-RU', {
+        day:    '2-digit',
+        month:  '2-digit',
+        year:   'numeric',
+        hour:   '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+
+      console.log('[KrakenUC] Product selected:', product.id, '| Timestamp:', purchaseTimestamp);
+
+      // Populate modal details
+      document.getElementById('detailPack').textContent      = product.label;
+      document.getElementById('detailPrice').textContent     = product.price;
+      document.getElementById('detailTimestamp').textContent = purchaseTimestamp;
+
+      // Reset mode to entry
+      setMode('entry');
+      document.getElementById('userIdInput').value = '';
+      validateInput();
+
+      // Show modal
+      document.getElementById('modalOverlay').classList.add('active');
+    }
+
+    // ── Close modal ───────────────────────────────────────────────────────
+    function closeModal() {
+      document.getElementById('modalOverlay').classList.remove('active');
+    }
+
+    // ── Mode toggle ───────────────────────────────────────────────────────
+    function setMode(mode) {
+      currentMode = mode;
+      document.getElementById('btnModeEntry').classList.toggle('active', mode === 'entry');
+      document.getElementById('btnModeId').classList.toggle('active',    mode === 'id');
+      document.getElementById('userIdGroup').style.display = mode === 'id' ? 'block' : 'none';
+      validateInput();
+    }
+
+    // ── Validate & enable/disable confirm button ──────────────────────────
+    function validateInput() {
+      const btn    = document.getElementById('btnConfirm');
+      const userId = document.getElementById('userIdInput').value.trim();
+
+      if (currentMode === 'entry') {
+        btn.disabled = false;
+      } else {
+        btn.disabled = userId.length === 0;
+      }
+    }
+
+    // ── Submit final order ────────────────────────────────────────────────
+    function submitFinalOrder() {
+      if (!selectedProduct || !purchaseTimestamp) return;
+
+      const packId  = selectedProduct.id;
+      const userId  = document.getElementById('userIdInput').value.trim();
+      let   payload = '';
+
+      if (currentMode === 'entry') {
+        // Entry mode: no user ID
+        payload = `${packId}_${purchaseTimestamp}_status_paid`;
+        console.log('[KrakenUC] Submitting order (entry mode) | Pack:', packId, '| Timestamp:', purchaseTimestamp, '| Payload:', payload);
+      } else {
+        // ID mode: include user ID
+        payload = `${packId}_uid_${userId}_${purchaseTimestamp}_status_paid`;
+        console.log('[KrakenUC] Submitting order (ID mode) | Pack:', packId, '| UserID:', userId, '| Timestamp:', purchaseTimestamp, '| Payload:', payload);
+      }
+
+      tg.sendData(payload);
+      closeModal();
+      showToast('✅ Заказ отправлен!');
+    }
+
+    // ── Toast helper ──────────────────────────────────────────────────────
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      setTimeout(() => el.classList.remove('show'), 2800);
+    }
+
+    // ── Close modal on overlay click ──────────────────────────────────────
+    document.getElementById('modalOverlay').addEventListener('click', function(e) {
+      if (e.target === this) closeModal();
+    });
+
+    // ── Init ──────────────────────────────────────────────────────────────
+    renderProducts();
+  </script>
+</body>
+</html>
