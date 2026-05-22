@@ -10,14 +10,18 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 TOKEN      = os.getenv("TOKEN")
 ADMIN_IDS  = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
-# Секрет для проверки подписи запросов с фронтенда.
-# Задай любую длинную случайную строку в переменных Railway: API_SECRET=...
 API_SECRET = os.getenv("API_SECRET", "")
 
 bot = Bot(token=TOKEN)
 dp  = Dispatcher()
 
 pending_receipts: dict[int, str] = {}
+
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin":  "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Signature",
+}
 
 
 # ═══════════════════════════════════════════════════════
@@ -104,35 +108,34 @@ async def handle_text(message: types.Message):
 
 
 # ═══════════════════════════════════════════════════════
-#  HTTP-СЕРВЕР (принимает заказы с фронтенда)
+#  HTTP-СЕРВЕР
 # ═══════════════════════════════════════════════════════
 
 def verify_signature(body: bytes, sig_header: str) -> bool:
-    """Проверяем HMAC-подпись запроса от фронтенда."""
     if not API_SECRET:
-        return True  # если секрет не задан — пропускаем (для отладки)
+        return True
     expected = hmac.new(API_SECRET.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, sig_header or "")
 
 
+async def handle_options(request: web.Request) -> web.Response:
+    """Preflight CORS."""
+    return web.Response(status=204, headers=CORS_HEADERS)
+
+
 async def handle_order(request: web.Request) -> web.Response:
-    """
-    POST /order
-    Headers: X-Signature: <hmac-sha256 подпись тела>
-    Body JSON: { order_id, type, item, price, buyer_id, buyer_name,
-                 username?, uid?, method?, bank, card }
-    """
     body = await request.read()
 
-    # Проверка подписи
     sig = request.headers.get("X-Signature", "")
     if not verify_signature(body, sig):
-        return web.json_response({"ok": False, "error": "Forbidden"}, status=403)
+        return web.json_response({"ok": False, "error": "Forbidden"},
+                                 status=403, headers=CORS_HEADERS)
 
     try:
         data = json.loads(body)
     except Exception:
-        return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+        return web.json_response({"ok": False, "error": "Invalid JSON"},
+                                 status=400, headers=CORS_HEADERS)
 
     order_id   = data.get("order_id", "???")
     buyer_id   = data.get("buyer_id")
@@ -155,38 +158,36 @@ async def handle_order(request: web.Request) -> web.Response:
     sep = "─" * 28
 
     admin_text = (
-        f"🔔 НОВЫЙ ЗАКАЗ\n{sep}\n"
-        f"🔑 № Заказа: {order_id}\n"
-        f"📦 Тип: {order_type}\n"
-        f"🛍 Товар: {item}\n"
+        f"🔔 <b>НОВЫЙ ЗАКАЗ</b>\n{sep}\n"
+        f"🔑 <b>№ Заказа:</b> <code>{order_id}</code>\n"
+        f"📦 <b>Тип:</b> {order_type}\n"
+        f"🛍 <b>Товар:</b> {item}\n"
         f"{extra}"
-        f"💳 Банк: {bank} | {card}\n"
-        f"💰 Сумма: {price}\n"
-        f"👤 Покупатель: {buyer_name} ({buyer_id})\n"
+        f"💳 <b>Банк:</b> {bank} | {card}\n"
+        f"💰 <b>Сумма:</b> {price}\n"
+        f"👤 <b>Покупатель:</b> {buyer_name} (<code>{buyer_id}</code>)\n"
         f"{sep}\n"
-        f"✅ Статус: Ожидает выполнения"
+        f"✅ <b>Статус:</b> Ожидает выполнения"
     )
 
-    # Уведомляем админов
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, admin_text)
+            await bot.send_message(admin_id, admin_text, parse_mode="HTML")
         except Exception as e:
             print(f"❌ Админ {admin_id}: {e}")
 
-    # Пишем клиенту "Заказ принят" и запрашиваем квитанцию
     if buyer_id:
         try:
             client_text = (
-                f"🧾 ВАШ ЗАКАЗ ПРИНЯТ\n{sep}\n"
-                f"🔑 № Заказа: {order_id}\n"
-                f"📦 Тип: {order_type}\n"
-                f"🛍 Товар: {item}\n"
+                f"🧾 <b>ВАШ ЗАКАЗ ПРИНЯТ</b>\n{sep}\n"
+                f"🔑 <b>№ Заказа:</b> <code>{order_id}</code>\n"
+                f"📦 <b>Тип:</b> {order_type}\n"
+                f"🛍 <b>Товар:</b> {item}\n"
                 f"{extra}"
-                f"💰 Сумма: {price}\n"
+                f"💰 <b>Сумма:</b> {price}\n"
                 f"{sep}\n"
                 f"✅ Оплата получена — обрабатываем заказ.\n\n"
-                f"📎 Пожалуйста, отправьте <b>скриншот квитанции об оплате</b> прямо сюда."
+                f"📎 Отправьте <b>скриншот квитанции об оплате</b> прямо сюда."
             )
             await bot.send_message(buyer_id, client_text, parse_mode="HTML")
             pending_receipts[int(buyer_id)] = order_id
@@ -194,11 +195,11 @@ async def handle_order(request: web.Request) -> web.Response:
         except Exception as e:
             print(f"❌ Клиент {buyer_id}: {e}")
 
-    return web.json_response({"ok": True})
+    return web.json_response({"ok": True}, headers=CORS_HEADERS)
 
 
 async def handle_health(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok"})
+    return web.json_response({"status": "ok"}, headers=CORS_HEADERS)
 
 
 # ═══════════════════════════════════════════════════════
@@ -215,19 +216,18 @@ async def main():
     if not API_SECRET:
         print("⚠️  API_SECRET не задан — подписи не проверяются!")
 
-    # Запускаем HTTP-сервер рядом с ботом
     app = web.Application()
-    app.router.add_post("/order", handle_order)
-    app.router.add_get("/health", handle_health)
+    app.router.add_options("/order",  handle_options)   # preflight
+    app.router.add_post("/order",     handle_order)
+    app.router.add_get("/health",     handle_health)
 
     port = int(os.getenv("PORT", 8080))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 HTTP сервер запущен на порту {port}")
+    print(f"🌐 HTTP сервер на порту {port}")
 
-    # Запускаем polling бота параллельно
     await dp.start_polling(bot)
 
 
