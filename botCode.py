@@ -3,6 +3,9 @@ import os
 import json
 import hashlib
 import hmac
+import time
+from urllib.parse import unquote
+from collections import defaultdict
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -10,18 +13,102 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 TOKEN      = os.getenv("TOKEN")
 ADMIN_IDS  = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
-API_SECRET = os.getenv("API_SECRET", "")
+
+# ─── Реквизиты банков — только в переменных окружения Railway, никогда не в коде ───
+# Формат переменной BANKS_JSON (задаётся в Railway → Variables):
+# {
+#   "mono":   { "name": "Mono Bank",  "cards": ["4441 1110 3877 4935", "4441 1110 2281 0828", "4874 0700 2469 8423"] },
+#   "myraif": { "name": "MyRaif",     "cards": ["4149 5110 2786 0675"] },
+#   "sense":  { "name": "Sense Bank", "cards": ["4028 0820 1619 2153"] },
+#   "pumb":   { "name": "PUMB",       "cards": ["5355 2800 4692 2306"] }
+# }
+try:
+    BANKS: dict = json.loads(os.getenv("BANKS_JSON", "{}"))
+except Exception:
+    BANKS = {}
+
+# Разрешённый Origin — твой GitHub Pages домен
+ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "https://liazzz1.github.io")
 
 bot = Bot(token=TOKEN)
 dp  = Dispatcher()
 
 pending_receipts: dict[int, str] = {}
 
-CORS_HEADERS = {
-    "Access-Control-Allow-Origin":  "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Signature",
-}
+# ─── Rate limiting: не более 5 запросов в минуту с одного IP ───
+_rate_store: dict[str, list] = defaultdict(list)
+RATE_LIMIT   = 5
+RATE_WINDOW  = 60  # секунд
+
+def is_rate_limited(ip: str) -> bool:
+    now = time.time()
+    calls = [t for t in _rate_store[ip] if now - t < RATE_WINDOW]
+    _rate_store[ip] = calls
+    if len(calls) >= RATE_LIMIT:
+        return True
+    _rate_store[ip].append(now)
+    return False
+
+
+def cors_headers(origin: str) -> dict:
+    """Возвращаем Access-Control только для нашего домена."""
+    allowed = origin if origin.startswith(ALLOWED_ORIGIN) else ALLOWED_ORIGIN
+    return {
+        "Access-Control-Allow-Origin":  allowed,
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Vary": "Origin",
+    }
+
+
+# ═══════════════════════════════════════════════════════
+#  ВЕРИФИКАЦИЯ initData от Telegram Web App
+# ═══════════════════════════════════════════════════════
+
+def verify_telegram_init_data(init_data: str) -> dict | None:
+    """
+    Верифицирует подпись initData по алгоритму Telegram:
+    https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+
+    Возвращает dict с данными пользователя или None если подпись неверна.
+    """
+    if not init_data or not TOKEN:
+        return None
+
+    try:
+        params = {}
+        for part in init_data.split("&"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                params[k] = unquote(v)
+
+        received_hash = params.pop("hash", None)
+        if not received_hash:
+            return None
+
+        # Строка для проверки: пары key=value, отсортированные по ключу, через \n
+        data_check_string = "\n".join(
+            f"{k}={v}" for k, v in sorted(params.items())
+        )
+
+        # secret_key = HMAC-SHA256("WebAppData", bot_token)
+        secret_key = hmac.new(b"WebAppData", TOKEN.encode(), hashlib.sha256).digest()
+        expected_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+
+        if not hmac.compare_digest(expected_hash, received_hash):
+            return None
+
+        # Проверяем свежесть: initData не старше 1 часа
+        auth_date = int(params.get("auth_date", 0))
+        if time.time() - auth_date > 3600:
+            return None
+
+        user_str = params.get("user", "{}")
+        return json.loads(user_str)
+
+    except Exception as e:
+        print(f"⚠️ initData verify error: {e}")
+        return None
 
 
 # ═══════════════════════════════════════════════════════
@@ -111,35 +198,77 @@ async def handle_text(message: types.Message):
 #  HTTP-СЕРВЕР
 # ═══════════════════════════════════════════════════════
 
-def verify_signature(body: bytes, sig_header: str) -> bool:
-    if not API_SECRET:
-        return True
-    expected = hmac.new(API_SECRET.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, sig_header or "")
-
-
 async def handle_options(request: web.Request) -> web.Response:
     """Preflight CORS."""
-    return web.Response(status=204, headers=CORS_HEADERS)
+    origin = request.headers.get("Origin", "")
+    return web.Response(status=204, headers=cors_headers(origin))
+
+
+async def handle_card(request: web.Request) -> web.Response:
+    """
+    Возвращает реквизиты банка после верификации initData.
+    POST /card  { "bank_id": "mono", "init_data": "..." }
+    """
+    origin = request.headers.get("Origin", "")
+    ip = request.remote or "unknown"
+
+    if is_rate_limited(ip):
+        return web.json_response({"ok": False, "error": "Too many requests"},
+                                 status=429, headers=cors_headers(origin))
+
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "Invalid JSON"},
+                                 status=400, headers=cors_headers(origin))
+
+    init_data = data.get("init_data", "")
+    user = verify_telegram_init_data(init_data)
+    if user is None:
+        return web.json_response({"ok": False, "error": "Unauthorized"},
+                                 status=401, headers=cors_headers(origin))
+
+    bank_id = data.get("bank_id", "")
+    bank = BANKS.get(bank_id)
+    if not bank:
+        return web.json_response({"ok": False, "error": "Unknown bank"},
+                                 status=400, headers=cors_headers(origin))
+
+    import random
+    cards = bank.get("cards", [])
+    card = random.choice(cards) if cards else "—"
+
+    return web.json_response(
+        {"ok": True, "name": bank["name"], "card": card},
+        headers=cors_headers(origin)
+    )
 
 
 async def handle_order(request: web.Request) -> web.Response:
-    body = await request.read()
+    origin = request.headers.get("Origin", "")
+    ip = request.remote or "unknown"
 
-    sig = request.headers.get("X-Signature", "")
-    if not verify_signature(body, sig):
-        return web.json_response({"ok": False, "error": "Forbidden"},
-                                 status=403, headers=CORS_HEADERS)
+    if is_rate_limited(ip):
+        return web.json_response({"ok": False, "error": "Too many requests"},
+                                 status=429, headers=cors_headers(origin))
 
     try:
-        data = json.loads(body)
+        data = await request.json()
     except Exception:
         return web.json_response({"ok": False, "error": "Invalid JSON"},
-                                 status=400, headers=CORS_HEADERS)
+                                 status=400, headers=cors_headers(origin))
+
+    # ── Верификация пользователя через initData ──
+    init_data = data.get("init_data", "")
+    user = verify_telegram_init_data(init_data)
+    if user is None:
+        return web.json_response({"ok": False, "error": "Unauthorized"},
+                                 status=401, headers=cors_headers(origin))
+
+    buyer_id   = user.get("id")
+    buyer_name = f"@{user['username']}" if user.get("username") else user.get("first_name", "неизвестен")
 
     order_id   = data.get("order_id", "???")
-    buyer_id   = data.get("buyer_id")
-    buyer_name = data.get("buyer_name", "неизвестен")
     order_type = data.get("type", "")
     item       = data.get("item", "")
     price      = data.get("price", "")
@@ -151,7 +280,7 @@ async def handle_order(request: web.Request) -> web.Response:
         method = data.get("method", "—")
         uid    = data.get("uid", "")
         extra  = f"🎮 Метод: {method}\n" + (f"🆔 Game ID: {uid}\n" if uid else "")
-    elif order_type == "Telegram Stars":
+    elif order_type in ("Telegram Stars", "Telegram Premium"):
         username = data.get("username", "—")
         extra    = f"📲 TG Username: {username}\n"
 
@@ -195,11 +324,11 @@ async def handle_order(request: web.Request) -> web.Response:
         except Exception as e:
             print(f"❌ Клиент {buyer_id}: {e}")
 
-    return web.json_response({"ok": True}, headers=CORS_HEADERS)
+    return web.json_response({"ok": True}, headers=cors_headers(origin))
 
 
 async def handle_health(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok"}, headers=CORS_HEADERS)
+    return web.json_response({"status": "ok"})
 
 
 # ═══════════════════════════════════════════════════════
@@ -213,12 +342,16 @@ async def main():
         print("⚠️  ADMIN_IDS не задан!")
     else:
         print(f"✅ Админы: {ADMIN_IDS}")
-    if not API_SECRET:
-        print("⚠️  API_SECRET не задан — подписи не проверяются!")
+    if not BANKS:
+        print("⚠️  BANKS_JSON не задан — /card будет возвращать ошибку!")
+    else:
+        print(f"✅ Банки загружены: {list(BANKS.keys())}")
 
     app = web.Application()
-    app.router.add_options("/order",  handle_options)   # preflight
+    app.router.add_options("/order",  handle_options)
+    app.router.add_options("/card",   handle_options)
     app.router.add_post("/order",     handle_order)
+    app.router.add_post("/card",      handle_card)
     app.router.add_get("/health",     handle_health)
 
     port = int(os.getenv("PORT", 8080))
